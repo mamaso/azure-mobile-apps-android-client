@@ -73,8 +73,6 @@ public class LocalTableOperationProcessor implements TableOperationVisitor<Void>
 
         JsonObject item = new JsonObject();
         item.addProperty("id", tableItemId);
-        item.addProperty("tablename", operation.getTableName());
-        item.addProperty("itemid", operation.getItemId());
         item.add("clientitem", backedUpItem);
 
         this.mStore.upsert(this.mItemBackupTable, item, false);

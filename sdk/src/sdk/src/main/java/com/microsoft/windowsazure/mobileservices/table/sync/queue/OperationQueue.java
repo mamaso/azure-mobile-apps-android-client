@@ -261,6 +261,21 @@ public class OperationQueue {
         }
     }
 
+    public void setOperationState(String tableItemId, MobileServiceTableOperationState state) throws MobileServiceLocalStoreException {
+        this.mSyncLock.writeLock().lock();
+
+        try {
+            if (this.mIdOperationMap.containsKey(tableItemId)) {
+                OperationQueueItem currentOperationQueueItem = this.mIdOperationMap.get(tableItemId);
+                currentOperationQueueItem.setOperationState(state);
+            } else {
+                throw new IllegalStateException("The operation to update could not be found");
+            }
+        } finally {
+            this.mSyncLock.writeLock().unlock();
+        }
+    }
+
     public void removeOperationWithErrorFromQueue(TableOperationError operationError) throws ParseException, MobileServiceLocalStoreException {
         this.mSyncLock.writeLock().lock();
 

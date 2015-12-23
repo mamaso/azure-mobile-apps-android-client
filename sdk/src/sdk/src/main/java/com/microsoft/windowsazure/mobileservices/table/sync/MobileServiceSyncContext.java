@@ -47,6 +47,7 @@ import com.microsoft.windowsazure.mobileservices.table.sync.operations.MobileSer
 import com.microsoft.windowsazure.mobileservices.table.sync.operations.RemoteTableOperationProcessor;
 import com.microsoft.windowsazure.mobileservices.table.sync.operations.TableOperation;
 import com.microsoft.windowsazure.mobileservices.table.sync.operations.TableOperationError;
+import com.microsoft.windowsazure.mobileservices.table.sync.operations.TableOperationKind;
 import com.microsoft.windowsazure.mobileservices.table.sync.operations.UpdateOperation;
 import com.microsoft.windowsazure.mobileservices.table.sync.pull.IncrementalPullStrategy;
 import com.microsoft.windowsazure.mobileservices.table.sync.pull.PullStrategy;
@@ -151,8 +152,6 @@ public class MobileServiceSyncContext {
     private static void initializeStore(MobileServiceLocalStore store) throws MobileServiceLocalStoreException {
         Map<String, ColumnDataType> columns = new HashMap<String, ColumnDataType>();
         columns.put("id", ColumnDataType.String);
-        columns.put("tablename", ColumnDataType.String);
-        columns.put("itemid", ColumnDataType.String);
         columns.put("clientitem", ColumnDataType.Other);
 
         store.defineTable(ITEM_BACKUP_TABLE, columns);
@@ -304,6 +303,54 @@ public class MobileServiceSyncContext {
 
             removeTableOperation(tableOperationError);
 
+        } finally {
+            try {
+                this.mInitLock.readLock().unlock();
+            } finally {
+                try {
+                    this.mOpLock.writeLock().unlock();
+                } finally {
+                    try {
+                        this.mIdLockMap.unLock(idLock);
+                    } finally {
+                        this.mTableLockMap.unLockRead(tableLock);
+                    }
+                }
+            }
+        }
+    }
+
+    public void updateOperation(TableOperationError tableOperationError) throws Throwable {
+        MultiReadWriteLock<String> tableLock = null;
+        MultiLock<String> idLock = null;
+
+        this.mInitLock.readLock().lock();
+
+        try {
+            ensureCorrectlyInitialized();
+
+            this.mOpLock.writeLock().lock();
+
+            String tableItemId = tableOperationError.getTableName() + "/" + tableOperationError.getItemId();
+
+            tableLock = this.mTableLockMap.lockRead(tableOperationError.getTableName());
+
+            idLock = this.mIdLockMap.lock(tableItemId);
+
+            if(tableOperationError.getOperationKind() == TableOperationKind.Delete) {
+                JsonObject backupObject = new JsonObject();
+                backupObject.addProperty("id", tableItemId);
+                backupObject.add("clientitem", tableOperationError.getServerItem());
+
+                // if delete, update item in backup table with new server item
+                this.mStore.upsert(ITEM_BACKUP_TABLE, backupObject, true);
+            } else {
+                // update item in local store with new server item
+                this.mStore.upsert(tableOperationError.getTableName(), tableOperationError.getServerItem(), true);
+            }
+
+            // update operation in-place
+            this.mOpQueue.setOperationState(tableItemId, MobileServiceTableOperationState.Pending);
         } finally {
             try {
                 this.mInitLock.readLock().unlock();
