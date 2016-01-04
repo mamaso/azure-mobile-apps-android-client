@@ -89,8 +89,9 @@ public class OfflineTests extends TestGroup {
         this.addTest(createSyncConflictTest(false));
         this.addTest(createSyncConflictTest(true));
 
-        this.addTest(createSyncConflictAndResolveWithMethodTest(false));
-        this.addTest(createSyncConflictAndResolveWithMethodTest(true));
+        this.addTest(createSyncConflictAndResolveWithMethodTest(ResolutionMethod.cancelAndUpdate));
+        this.addTest(createSyncConflictAndResolveWithMethodTest(ResolutionMethod.cancelAndDiscard));
+        this.addTest(createSyncConflictAndResolveWithMethodTest(ResolutionMethod.updateOperation));
 
         this.addTest(LoginTests.createLogoutTest());
         this.addTest(createSyncTestForAuthenticatedTable(false));
@@ -497,10 +498,10 @@ public class OfflineTests extends TestGroup {
                         requestsSentToServer++;
                         remoteTable.lookUp(item.getId()).get();
                         log("Error, item is present in the server");
-                        // return false;
-                    } catch (ExecutionException ex) {
-                        log("Ok, item is not in the server:" + ex.getMessage());
-                    }
+                    // return false;
+                } catch (ExecutionException ex) {
+                    log("Ok, item is not in the server:" + ex.getMessage());
+                }
 
                     if (!validateRequestCount(this, serviceFilter.requestCount, requestsSentToServer)) {
                         result.setStatus(TestStatus.Failed);
@@ -770,7 +771,7 @@ public class OfflineTests extends TestGroup {
                             log("Cleaning operation");
 
                             try {
-                                offlineReadyClient.getSyncContext().cancelAndUpdateItem(tableOperationError);
+                                offlineReadyClient.getSyncContext().updateOperation(tableOperationError);
                             } catch (Throwable throwable) {
                                 result.setStatus(TestStatus.Failed);
                                 callback.onTestComplete(this, result);
@@ -783,10 +784,6 @@ public class OfflineTests extends TestGroup {
                             return;
                         }
                     }
-
-                    log("Cleaning up");
-
-                    localTable.delete(serverItem).get();
 
                     log("Local table cleaned up. Now sync'ing once more");
                     offlineReadyClient.getSyncContext().push().get();
@@ -951,7 +948,13 @@ public class OfflineTests extends TestGroup {
         return test;
     }
 
-    private TestCase createSyncConflictAndResolveWithMethodTest(final boolean useCancelAndUpdateItem) {
+    enum ResolutionMethod {
+        cancelAndUpdate,
+        cancelAndDiscard,
+        updateOperation
+    }
+
+    private TestCase createSyncConflictAndResolveWithMethodTest(final ResolutionMethod method) {
 
         final String tableName = "offlineReady";
 
@@ -964,6 +967,7 @@ public class OfflineTests extends TestGroup {
                 TestResult result = new TestResult();
                 result.setStatus(TestStatus.Passed);
                 result.setTestCase(testCase);
+                int pendingOperationCount = 0;
                 try {
 
                     SQLiteLocalStore localStore = new SQLiteLocalStore(offlineReadyClient.getContext(), OFFLINE_TABLE_NAME, null, 1);
@@ -1061,42 +1065,65 @@ public class OfflineTests extends TestGroup {
                             return;
                         }
 
-                        if (useCancelAndUpdateItem) {
-                            try {
-                                offlineReadyClient.getSyncContext().cancelAndUpdateItem(tableOperationError);
-                            } catch (Throwable throwable) {
-                                throwable.printStackTrace();
-                            }
+                        switch(method) {
+                            case cancelAndUpdate:
+                                try {
+                                    offlineReadyClient.getSyncContext().cancelAndUpdateItem(tableOperationError);
+                                } catch (Throwable throwable) {
+                                    throwable.printStackTrace();
+                                }
 
-                            OfflineReadyItem resolvedLocalItem = localTable.lookUp(tableOperationError.getItemId()).get();
+                                OfflineReadyItem resolvedLocalItem = localTable.lookUp(tableOperationError.getItemId()).get();
 
-                            if (!serverItem.equals(resolvedLocalItem)) {
-                                result.setStatus(TestStatus.Failed);
-                                result.setStatus(TestStatus.Failed);
-                                callback.onTestComplete(this, result);
-                                return;
-                            }
+                                if (!serverItem.equals(resolvedLocalItem)) {
+                                    result.setStatus(TestStatus.Failed);
+                                    result.setStatus(TestStatus.Failed);
+                                    callback.onTestComplete(this, result);
+                                    return;
+                                }
+                                break;
 
-                        } else {
-                            try {
-                                offlineReadyClient.getSyncContext().cancelAndDiscardItem(tableOperationError);
-                            } catch (Throwable throwable) {
-                                result.setStatus(TestStatus.Failed);
-                                callback.onTestComplete(this, result);
-                                return;
-                            }
+                            case cancelAndDiscard:
+                                try {
+                                    offlineReadyClient.getSyncContext().cancelAndDiscardItem(tableOperationError);
+                                } catch (Throwable throwable) {
+                                    result.setStatus(TestStatus.Failed);
+                                    callback.onTestComplete(this, result);
+                                    return;
+                                }
 
-                            OfflineReadyItem resolvedItem = localTable.lookUp(tableOperationError.getItemId()).get();
+                                OfflineReadyItem resolvedItem = localTable.lookUp(tableOperationError.getItemId()).get();
 
-                            if (resolvedItem != null) {
-                                result.setStatus(TestStatus.Failed);
-                                callback.onTestComplete(this, result);
-                            }
+                                if (resolvedItem != null) {
+                                    result.setStatus(TestStatus.Failed);
+                                    callback.onTestComplete(this, result);
+                                }
+                                break;
+
+                            case updateOperation:
+                                try {
+                                    offlineReadyClient.getSyncContext().updateOperation(tableOperationError);
+                                } catch (Throwable throwable) {
+                                    result.setStatus(TestStatus.Failed);
+                                    callback.onTestComplete(this, result);
+                                    return;
+                                }
+
+                                OfflineReadyItem updatedItem = localTable.lookUp(tableOperationError.getItemId()).get();
+                                pendingOperationCount = 1;
+
+                                if (!serverItem.equals(updatedItem)) {
+                                    result.setStatus(TestStatus.Failed);
+                                    result.setStatus(TestStatus.Failed);
+                                    callback.onTestComplete(this, result);
+                                    return;
+                                }
+                                break;
                         }
                     }
 
                     try {
-                        if (offlineReadyClient.getSyncContext().getPendingOperations() != 0) {
+                        if (offlineReadyClient.getSyncContext().getPendingOperations() != pendingOperationCount) {
                             log("Expected 0 pending operations");
 
                             result.setStatus(TestStatus.Failed);
@@ -1125,7 +1152,7 @@ public class OfflineTests extends TestGroup {
             }
         };
 
-        test.setName("Offline - dealing with conflicts - with " + (useCancelAndUpdateItem ? "cancelAndUpdateItem" : "cancelAndDiscardItem"));
+        test.setName("Offline - dealing with conflicts - with " + method.toString());
 
         return test;
     }
