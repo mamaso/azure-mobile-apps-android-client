@@ -51,7 +51,7 @@ public class LoginTests extends InstrumentationTestCase {
 
     @Override
     protected void setUp() throws Exception {
-        appUrl = "http://myapp.com/";
+        appUrl = "http://myapp.com:3333/";
         super.setUp();
     }
 
